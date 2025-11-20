@@ -1,0 +1,742 @@
+Here is the complete, single-file source code for **"Rescue the Turtle"**.
+
+You can copy the code below, save it as an `.html` file (e.g., `game.html`), and open it in any modern web browser (Chrome, Firefox, Edge) to play.
+
+### **How to Play**
+
+1.  **Save the file:** Copy the code into a text editor (Notepad, VS Code) and save as `index.html`.
+2.  **Open:** Double-click the file to open in your browser.
+3.  **Audio:** Click "Start Game" to enable sound effects.
+
+-----
+
+### **Code Structure Overview**
+
+  * **HTML:** Sets up the game canvas.
+  * **CSS:** Styles the page to look like a game console.
+  * **JavaScript:** Contains all logic (Game Loop, Player, Enemy, Map, Physics).
+
+<!-- end list -->
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Rescue the Turtle - RPG Adventure</title>
+    <style>
+        /* --- CSS STYLES --- */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #2c3e50; /* Dark background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Verdana', sans-serif;
+            color: white;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            border: 4px solid #ecf0f1;
+        }
+
+        canvas {
+            background-color: #87CEEB; /* Default sky blue */
+            display: block;
+        }
+
+        /* UI Overlay for Start Screen / Game Over */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.8);
+            text-align: center;
+            z-index: 10;
+        }
+
+        h1 { font-size: 40px; margin-bottom: 10px; color: #f1c40f; }
+        p { font-size: 18px; line-height: 1.6; max-width: 600px; }
+        
+        button {
+            margin-top: 20px;
+            padding: 15px 30px;
+            font-size: 20px;
+            background-color: #e67e22;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover { background-color: #d35400; }
+
+        .hidden { display: none !important; }
+
+        /* Instructions panel inside the UI */
+        .controls-box {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div id="ui-layer">
+            <h1>Rescue the Turtle</h1>
+            <p>
+                The peaceful island is in trouble! The cunning Fox has captured the Turtle.<br>
+                You are <strong>Capybara</strong>. Swim through the waters, fight the Fox, and save your friend.
+            </p>
+            
+            <div class="controls-box">
+                <strong>Controls:</strong><br>
+                [W, A, S, D] or Arrows : Move<br>
+                [J] : Water Shot (Fast, Low Damage)<br>
+                [K] : Nature Bomb (Slow, High Damage)<br>
+                [Space] : Interact / Next Dialogue
+            </div>
+
+            <button id="startBtn" onclick="startGame()">Start Adventure</button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ==========================================
+         * RESCUE THE TURTLE - JAVASCRIPT LOGIC
+         * ==========================================
+         * * Goal: Find the Turtle in Level 3.
+         * - Good Ending: Defeat Fox AND Rescue Turtle.
+         * - Open Ending: Rescue Turtle, but Fox is still alive.
+         * - Bad Ending: HP reaches 0.
+         */
+
+        // --- 1. CONFIGURATION & CONSTANTS ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const uiLayer = document.getElementById('ui-layer');
+        const startBtn = document.getElementById('startBtn');
+
+        const TILE_SIZE = 40; // Size of each grid block
+        const COLS = 20;      // 800px width
+        const ROWS = 15;      // 600px height
+
+        // Tile Types
+        const TILE_GRASS = 0;
+        const TILE_WATER = 1; // Capybara moves fast here
+        const TILE_WALL  = 2;
+        const TILE_SAND  = 3;
+        const TILE_DOOR  = 9; // Go to next level
+
+        // Game States
+        const STATE_START = 0;
+        const STATE_PLAYING = 1;
+        const STATE_DIALOGUE = 2;
+        const STATE_GAMEOVER = 3;
+
+        let currentState = STATE_START;
+        let currentLevelIndex = 0;
+
+        // Audio Context (Simple Beeps)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // --- 2. INPUT HANDLING ---
+        const keys = {};
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            // Handle dialogue skipping
+            if (e.code === 'Space' && currentState === STATE_DIALOGUE) {
+                dialogue.next();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        // --- 3. GAME OBJECTS (CLASSES) ---
+
+        // Basic Rectangle Collision Helper
+        function rectIntersect(r1, r2) {
+            return !(r2.x > r1.x + r1.width || 
+                     r2.x + r2.width < r1.x || 
+                     r2.y > r1.y + r1.height || 
+                     r2.y + r2.height < r1.y);
+        }
+
+        // --- THE PLAYER (CAPYBARA) ---
+        const player = {
+            x: 100, y: 100, width: 30, height: 30,
+            color: '#8B4513', // SaddleBrown
+            hp: 100, maxHp: 100,
+            speed: 3,
+            dx: 0, dy: 0,
+            cooldownJ: 0, // Normal attack cooldown
+            cooldownK: 0, // Special attack cooldown
+            facing: 'right',
+            
+            update: function() {
+                if (currentState !== STATE_PLAYING) return;
+
+                // 1. Calculate Movement based on Input
+                this.dx = 0; this.dy = 0;
+                
+                // Movement speed check based on terrain
+                let centerTile = getTileAt(this.x + 15, this.y + 15);
+                let currentSpeed = this.speed;
+
+                if (centerTile === TILE_WATER) {
+                    currentSpeed = 5; // Capybara swims fast!
+                } else if (centerTile === TILE_GRASS) {
+                    currentSpeed = 3;
+                }
+
+                if (keys['w'] || keys['arrowup'])    this.dy = -currentSpeed;
+                if (keys['s'] || keys['arrowdown'])  this.dy = currentSpeed;
+                if (keys['a'] || keys['arrowleft'])  { this.dx = -currentSpeed; this.facing = 'left'; }
+                if (keys['d'] || keys['arrowright']) { this.dx = currentSpeed; this.facing = 'right'; }
+
+                // 2. Apply Movement & Check Wall Collisions
+                this.moveAndCollide(this.dx, 0); // X axis
+                this.moveAndCollide(0, this.dy); // Y axis
+
+                // 3. Combat Input
+                if (keys['j'] && this.cooldownJ <= 0) {
+                    shootProjectile(this.x, this.y, this.facing, 'normal');
+                    this.cooldownJ = 20; // Frames
+                    playSound(400, 'square', 0.1);
+                }
+                if (keys['k'] && this.cooldownK <= 0) {
+                    shootProjectile(this.x, this.y, this.facing, 'special');
+                    this.cooldownK = 120; // Longer cooldown
+                    playSound(200, 'sawtooth', 0.3);
+                }
+
+                // Cooldown tick down
+                if (this.cooldownJ > 0) this.cooldownJ--;
+                if (this.cooldownK > 0) this.cooldownK--;
+
+                // Level transition (Door)
+                if (centerTile === TILE_DOOR) {
+                    nextLevel();
+                }
+            },
+
+            moveAndCollide: function(velX, velY) {
+                // Future position
+                let nextX = this.x + velX;
+                let nextY = this.y + velY;
+
+                // Check boundary
+                if (nextX < 0 || nextX + this.width > canvas.width || 
+                    nextY < 0 || nextY + this.height > canvas.height) return;
+
+                // Check walls
+                if (!isWall(nextX, nextY) && 
+                    !isWall(nextX + this.width, nextY) &&
+                    !isWall(nextX, nextY + this.height) &&
+                    !isWall(nextX + this.width, nextY + this.height)) {
+                        this.x = nextX;
+                        this.y = nextY;
+                }
+            },
+
+            draw: function() {
+                ctx.fillStyle = this.color;
+                // Draw Body
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                // Draw Eyes (cute touch)
+                ctx.fillStyle = 'black';
+                if(this.facing === 'right') {
+                    ctx.fillRect(this.x + 20, this.y + 5, 4, 4);
+                } else {
+                    ctx.fillRect(this.x + 5, this.y + 5, 4, 4);
+                }
+            }
+        };
+
+        // --- THE ENEMY (FOX) ---
+        const fox = {
+            x: 0, y: 0, width: 35, height: 35,
+            color: '#FF4500', // OrangeRed
+            hp: 100, maxHp: 100,
+            active: false, // Only active in specific levels
+            illusionTimer: 0,
+            trapTimer: 0,
+
+            reset: function(x, y, hp) {
+                this.x = x; this.y = y; this.hp = hp; this.maxHp = hp;
+                this.active = true;
+            },
+
+            update: function() {
+                if (!this.active || currentState !== STATE_PLAYING) return;
+
+                // Simple Chase Logic
+                let dist = Math.hypot(player.x - this.x, player.y - this.y);
+                
+                // Fox is wary of deep water (moves slower)
+                let centerTile = getTileAt(this.x + 15, this.y + 15);
+                let speed = (centerTile === TILE_WATER) ? 1 : 2.5;
+
+                if (dist < 300 && dist > 5) {
+                    let angle = Math.atan2(player.y - this.y, player.x - this.x);
+                    this.x += Math.cos(angle) * speed;
+                    this.y += Math.sin(angle) * speed;
+                }
+
+                // Collision with Player (Melee attack)
+                if (rectIntersect(this, player)) {
+                    player.hp -= 0.5; // Damage per frame
+                }
+
+                // Ability: Place Trap
+                this.trapTimer++;
+                if (this.trapTimer > 200) {
+                    traps.push({x: this.x, y: this.y, width: 20, height: 20, active: true});
+                    this.trapTimer = 0;
+                }
+            },
+
+            draw: function() {
+                if (!this.active) return;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                // HP Bar for Fox
+                ctx.fillStyle = 'red';
+                ctx.fillRect(this.x, this.y - 10, this.width, 5);
+                ctx.fillStyle = '#00ff00';
+                ctx.fillRect(this.x, this.y - 10, this.width * (this.hp / this.maxHp), 5);
+            }
+        };
+
+        // --- THE TURTLE (NPC) ---
+        const turtle = {
+            x: 0, y: 0, width: 30, height: 30,
+            visible: false,
+            rescued: false,
+            draw: function() {
+                if(!this.visible || this.rescued) return;
+                ctx.fillStyle = '#228B22'; // Forest Green
+                ctx.beginPath();
+                ctx.arc(this.x + 15, this.y + 15, 15, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = 'yellow'; // Shell pattern
+                ctx.fillRect(this.x + 10, this.y + 10, 10, 10);
+            }
+        };
+
+        // --- PROJECTILES & TRAPS ---
+        let projectiles = []; // {x, y, vx, vy, type, owner}
+        let traps = [];       // {x, y, w, h}
+
+        function shootProjectile(x, y, facing, type) {
+            let speed = (type === 'normal') ? 7 : 4;
+            let vx = (facing === 'right') ? speed : -speed;
+            projectiles.push({
+                x: x + 15, y: y + 15,
+                vx: vx, vy: 0,
+                width: (type === 'normal' ? 10 : 20),
+                height: (type === 'normal' ? 10 : 20),
+                type: type,
+                owner: 'player',
+                life: 60 // Frames to live
+            });
+        }
+
+        // --- 4. MAP SYSTEM ---
+        
+        // 0:Grass, 1:Water, 2:Wall/Tree, 3:Sand, 9:Door
+        const levels = [
+            // LEVEL 1: THE BEACH (Tutorial)
+            {
+                map: [
+                    "22222222222222222222",
+                    "20000003333311111112",
+                    "20000033333111111112",
+                    "20003333311111111112",
+                    "20003333111111111112",
+                    "20000333111111111112",
+                    "22000003111111111112",
+                    "22200003311111111112",
+                    "22220000331111111112",
+                    "22222000033311111112",
+                    "22222200003311111112",
+                    "22222000003311111112",
+                    "22220000000311111112",
+                    "22222222222299222222",
+                    "22222222222299222222"
+                ],
+                startPos: {x: 60, y: 60},
+                fox: null, // No fox in level 1
+                msg: "Level 1: The Beach. Practice swimming (faster in blue water)."
+            },
+            // LEVEL 2: THE JUNGLE (Traps and Fox appears)
+            {
+                map: [
+                    "22222222222222222222",
+                    "20002200002211220002",
+                    "20002200002211220002",
+                    "20000000000011000002",
+                    "22200222220011002222",
+                    "20000222220011000002",
+                    "20000000000011111002",
+                    "20022000000000000002",
+                    "20022000000000222002",
+                    "21111111000000222002",
+                    "21111111000000000002",
+                    "22222111000000000002",
+                    "22222000000000000002",
+                    "29922222222222222222",
+                    "29922222222222222222"
+                ],
+                startPos: {x: 60, y: 60},
+                fox: {x: 600, y: 300, hp: 50},
+                msg: "Level 2: The Jungle. Watch out! The Fox is setting traps."
+            },
+            // LEVEL 3: THE CAVE (Boss Fight & Turtle)
+            {
+                map: [
+                    "22222222222222222222",
+                    "23333333333333333332",
+                    "23333333333333333332",
+                    "23331111111111333332",
+                    "23331111111111333332",
+                    "23331113333111333332",
+                    "23331113333111333332",
+                    "23333333333333333332",
+                    "23333333333333333332",
+                    "23332222332222333332",
+                    "23332002332002333332",
+                    "23332002332002333332",
+                    "23333333333333333332",
+                    "23333333333333333332",
+                    "22222222222222222222"
+                ],
+                startPos: {x: 60, y: 280},
+                fox: {x: 700, y: 280, hp: 150},
+                turtle: {x: 750, y: 50},
+                msg: "Level 3: Fox's Lair. Rescue the Turtle!"
+            }
+        ];
+
+        let currentMapData = [];
+
+        function loadLevel(index) {
+            projectiles = [];
+            traps = [];
+            let lvl = levels[index];
+            
+            // Parse Map
+            currentMapData = [];
+            for(let r=0; r<ROWS; r++) {
+                let rowData = [];
+                for(let c=0; c<COLS; c++) {
+                    rowData.push(parseInt(lvl.map[r][c]));
+                }
+                currentMapData.push(rowData);
+            }
+
+            // Setup Player
+            player.x = lvl.startPos.x;
+            player.y = lvl.startPos.y;
+
+            // Setup Fox
+            if (lvl.fox) {
+                fox.reset(lvl.fox.x, lvl.fox.y, lvl.fox.hp);
+            } else {
+                fox.active = false;
+            }
+
+            // Setup Turtle
+            turtle.visible = false;
+            if (lvl.turtle) {
+                turtle.x = lvl.turtle.x;
+                turtle.y = lvl.turtle.y;
+                turtle.visible = true;
+            }
+
+            // Show Intro Dialog
+            dialogue.start([lvl.msg]);
+        }
+
+        function getTileAt(pixelX, pixelY) {
+            let c = Math.floor(pixelX / TILE_SIZE);
+            let r = Math.floor(pixelY / TILE_SIZE);
+            if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+                return currentMapData[r][c];
+            }
+            return TILE_WALL;
+        }
+
+        function isWall(x, y) {
+            let t = getTileAt(x, y);
+            return t === TILE_WALL;
+        }
+
+        function nextLevel() {
+            currentLevelIndex++;
+            if (currentLevelIndex < levels.length) {
+                loadLevel(currentLevelIndex);
+            } else {
+                // Shouldn't happen if logic is correct
+                console.log("No more levels");
+            }
+        }
+
+        // --- 5. DIALOGUE SYSTEM ---
+        const dialogue = {
+            active: false,
+            lines: [],
+            currentLine: 0,
+            
+            start: function(textArray) {
+                this.lines = textArray;
+                this.currentLine = 0;
+                this.active = true;
+                currentState = STATE_DIALOGUE;
+            },
+            
+            next: function() {
+                this.currentLine++;
+                if (this.currentLine >= this.lines.length) {
+                    this.active = false;
+                    currentState = STATE_PLAYING;
+                }
+            },
+
+            draw: function() {
+                if(!this.active) return;
+                
+                // Draw Box
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                ctx.fillRect(50, 450, 700, 120);
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(50, 450, 700, 120);
+
+                // Draw Text
+                ctx.fillStyle = 'white';
+                ctx.font = '20px Verdana';
+                ctx.fillText(this.lines[this.currentLine], 70, 490);
+                
+                ctx.font = '14px Verdana';
+                ctx.fillStyle = '#f1c40f';
+                ctx.fillText("Press SPACE to continue...", 600, 550);
+            }
+        };
+
+        // --- 6. LOGIC UPDATE ---
+        function update() {
+            if (currentState === STATE_GAMEOVER) return;
+            if (currentState === STATE_DIALOGUE) return;
+
+            player.update();
+            fox.update();
+
+            // Update Projectiles
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
+
+                // Hit Enemy
+                if (fox.active && rectIntersect(p, fox) && p.owner === 'player') {
+                    let dmg = (p.type === 'special') ? 25 : 8;
+                    fox.hp -= dmg;
+                    projectiles.splice(i, 1);
+                    playSound(100, 'sawtooth', 0.1);
+                    continue;
+                }
+
+                // Hit Wall or expire
+                if (isWall(p.x, p.y) || p.life <= 0) {
+                    projectiles.splice(i, 1);
+                }
+            }
+
+            // Check Traps
+            for (let i = traps.length - 1; i >= 0; i--) {
+                if (rectIntersect(player, traps[i])) {
+                    player.hp -= 10;
+                    traps.splice(i, 1); // Remove trap after trigger
+                    playSound(150, 'triangle', 0.2);
+                }
+            }
+
+            // --- ENDING CONDITIONS ---
+            
+            // 1. Check Death
+            if (player.hp <= 0) {
+                triggerEnding("BAD");
+            }
+
+            // 2. Check Win Conditions (Only in Level 3)
+            if (currentLevelIndex === 2 && turtle.visible) {
+                if (rectIntersect(player, turtle)) {
+                    // Player reached turtle
+                    if (fox.hp <= 0) {
+                        triggerEnding("GOOD");
+                    } else {
+                        triggerEnding("OPEN");
+                    }
+                }
+            }
+        }
+
+        // --- 7. DRAWING ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Map
+            for(let r=0; r<ROWS; r++) {
+                for(let c=0; c<COLS; c++) {
+                    let tile = currentMapData[r][c];
+                    let x = c * TILE_SIZE;
+                    let y = r * TILE_SIZE;
+
+                    if (tile === TILE_GRASS) ctx.fillStyle = '#7CFC00'; // Lawn Green
+                    else if (tile === TILE_WATER) ctx.fillStyle = '#00BFFF'; // Deep Sky Blue
+                    else if (tile === TILE_WALL)  ctx.fillStyle = '#2E8B57'; // Sea Green (Trees)
+                    else if (tile === TILE_SAND)  ctx.fillStyle = '#F4A460'; // Sandy Brown
+                    else if (tile === TILE_DOOR)  ctx.fillStyle = '#000000'; // Door/Cave entrance
+                    
+                    ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                    
+                    // Add simple detail to trees
+                    if(tile === TILE_WALL) {
+                        ctx.fillStyle = '#006400';
+                        ctx.beginPath();
+                        ctx.arc(x+20, y+20, 10, 0, Math.PI*2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Draw Objects
+            if (turtle.visible) turtle.draw();
+            traps.forEach(t => {
+                ctx.fillStyle = 'purple';
+                ctx.fillRect(t.x, t.y, t.width, t.height);
+            });
+            projectiles.forEach(p => {
+                ctx.fillStyle = (p.type === 'special') ? 'yellow' : 'white';
+                ctx.fillRect(p.x, p.y, p.width, p.height);
+            });
+
+            player.draw();
+            fox.draw();
+
+            // Draw UI HUD
+            drawHUD();
+
+            // Draw Dialogue Overlay
+            dialogue.draw();
+        }
+
+        function drawHUD() {
+            // Player HP
+            ctx.fillStyle = 'black';
+            ctx.fillRect(10, 10, 204, 24);
+            ctx.fillStyle = 'red';
+            ctx.fillRect(12, 12, 200, 20);
+            ctx.fillStyle = '#32CD32'; // Lime Green
+            ctx.fillRect(12, 12, Math.max(0, 200 * (player.hp / player.maxHp)), 20);
+            
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText("HP: " + Math.floor(player.hp), 20, 28);
+
+            // Cooldowns
+            ctx.fillText("J (Shot): " + (player.cooldownJ > 0 ? "Wait" : "Ready"), 230, 28);
+            ctx.fillText("K (Bomb): " + (player.cooldownK > 0 ? "Wait" : "Ready"), 380, 28);
+        }
+
+        // --- 8. GAME FLOW HELPERS ---
+        
+        function startGame() {
+            uiLayer.classList.add('hidden');
+            currentState = STATE_PLAYING;
+            currentLevelIndex = 0;
+            player.hp = 100;
+            
+            // Initialize Audio Context
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            loadLevel(0);
+            gameLoop();
+        }
+
+        function triggerEnding(type) {
+            currentState = STATE_GAMEOVER;
+            uiLayer.classList.remove('hidden');
+            startBtn.innerText = "Play Again";
+            
+            let title = uiLayer.querySelector('h1');
+            let p = uiLayer.querySelector('p');
+
+            if (type === "BAD") {
+                title.innerText = "Game Over";
+                title.style.color = "red";
+                p.innerHTML = "Capybara fainted! The Fox has taken over the island.<br>The Turtle remains lost forever...";
+            } else if (type === "GOOD") {
+                title.innerText = "Victory!";
+                title.style.color = "#2ecc71";
+                p.innerHTML = "You defeated the Fox and rescued the Turtle!<br>Peace returns to the tropical island.<br>Capybara and Turtle celebrate with a feast!";
+            } else if (type === "OPEN") {
+                title.innerText = "Turtle Rescued...";
+                title.style.color = "orange";
+                p.innerHTML = "You grabbed the Turtle and ran away!<br>However, the Fox is still out there watching...<br>Will it return? (To be continued)";
+            }
+        }
+
+        // Simple Sound Synthesis (Beep/Boop)
+        function playSound(freq, type, duration) {
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+                osc.stop(audioCtx.currentTime + duration);
+            } catch(e) { /* Ignore audio errors */ }
+        }
+
+        // --- MAIN LOOP ---
+        function gameLoop() {
+            update();
+            draw();
+            if (currentState !== STATE_GAMEOVER) {
+                requestAnimationFrame(gameLoop);
+            }
+        }
+
+    </script>
+</body>
+</html>
+```
